@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Today's heart rate</title>
+</head>
+<body>
+
+    <div id="plot_area" style="width:1000px;height:350px;"></div>
+
+    <script src="https://cdn.plot.ly/plotly-3.1.0.min.js"></script>
+    <script type="module">
+
+      // Initialize plotly
+      const plotly_elem = document.getElementById('plot_area');
+      const plotly_layout = {
+        margin: {t: 50},
+        title: 'Heart Rate',
+        grid: { rows: 1, columns: 2, pattern: "independent" }
+      };
+      var plotly_data = [
+        {x: [0,1,2,3,4], y: [0,1,4,9,16], type: 'scatter', name: 'heartrate'}
+      ];
+
+      Plotly.newPlot(plotly_elem, plotly_data, plotly_layout);
+
+      /*
+      async function getMyHRData() {
+
+        // TODO: Implement!
+
+      }
+
+      getMyHRData();
+      */
+
+    </script>
+</body>
+</html>
