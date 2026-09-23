@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HR WebBLE Gateway</title>
+</head>
+<body>
+
+<input id="HRValue" style="background-color: yellow; padding: 10pt; width: 30pt;" value="60"> BPM
+
+<p>
+<button id="startBtn">Start sensor</button>
+<button id="stopBtn">Stop sensor</button>
+<button id="sendBtn" onclick="sendHRValue()">Send HR Value</button>
+</p>
+
+<script>
+
+  const val = document.getElementById('HRValue');
+  let targetDevice;
+  let serviceUART;
+  let charUARTRX;
+
+  const BLE_UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const BLE_UART_RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+  // FHIR client, pointing to the KTH HAPI FHIR database
+  const client = jqFhir({ baseUrl: 'https://hapim.app.cloud.cbh.kth.se/fhir' });
+
+
+
+  console.log("init");
+
+
+  // This function is called when the Micro:Bit sends a value to the GW App.
+  // The Micro:Bit should send the latest step counter value every 10 seconds.
+
+  function handleBLENotifications(event)
+  {
+      let result = "";
+      for (var i = 0; i < event.target.value.byteLength; i++) {
+          result += String.fromCharCode(event.target.value.getUint8(i));
+      }
+
+      console.log(result);
+
+      // The Micro:Bit sends a line of 3 space-separated numbers,
+      // e.g. "652 654 40" — the 3rd column is the heart rate (BPM).
+      const parts = result.trim().split(/\s+/);
+      if (parts.length >= 3) {
+          const hr = parseInt(parts[2], 10);
+          if (!isNaN(hr)) {
+              lastHRValue = hr;
+              val.value = hr;
+          } else {
+              console.warn("Could not parse HR from:", result);
+          }
+      } else {
+          console.warn("Unexpected BLE data format:", result);
+      }
+  }
+
+  function sendHRValue()
+  {
+      console.log("Send HR Value");
+
+      const patientId = 616;
+
+      // Use whatever is currently shown in the yellow box
+      // (falls back to lastHRValue if the field was edited by hand)
+      const hrValue = parseInt(val.value, 10);
+      if (isNaN(hrValue)) {
+          console.warn("HR value is not a number, aborting send.");
+          //status.innerText = "HR value is not a valid number.";
+          return;
+      }
+
+      // Build a FHIR Observation resource for a single heart rate reading.
+      // LOINC 8867-4 = "Heart rate"
+      // SNOMED CT 72075005 = "Photoplethysmography" (the PPG sensor method)
+      const observation = {
+          resourceType: "Observation",
+          status: "final",
+          category: [
+              {
+                  coding: [
+                      {
+                          system: "http://terminology.hl7.org/CodeSystem/observation-category",
+                          code: "vital-signs",
+                          display: "Vital Signs"
+                      }
+                  ]
+              }
+          ],
+          code: {
+              coding: [
+                  {
+                      system: "http://loinc.org",
+                      code: "8867-4",
+                      display: "Heart rate"
+                  }
+              ]
+          },
+          method: {
+              coding: [
+                  {
+                      system: "http://snomed.info/sct",
+                      code: "72075005",
+                      display: "Photoplethysmography"
+                  }
+              ]
+          },
+          subject: {
+              reference: "Patient/" + patientId
+          },
+          effectiveDateTime: new Date().toISOString(),
+          valueQuantity: {
+              value: hrValue,
+              unit: "beats/minute",
+              system: "http://unitsofmeasure.org",
+              code: "/min"
+          }
+      };
+
+      console.log("Sending Observation:", observation);
+      status.innerText = "Sending...";
+
+      client.create({
+          entry: { content: observation }
+      }).then(function (res) {
+          console.log("SEND SUCCESS:", res);
+          status.innerText = "Sent HR=" + hrValue + " at " + new Date().toLocaleTimeString();
+      }).catch(function (err) {
+          console.error("SEND FAILED:", err);
+          status.innerText = "Send FAILED, see console.";
+      });
+  }
+
+
+  function startBluetooth()
+  {
+      console.log('Requesting Bluetooth Device...');
+      navigator.bluetooth.requestDevice({filters: [
+                                        {services: [BLE_UART_SERVICE]},
+                                        {namePrefix: 'BBC micro:bit '}]})
+      .then(device => {
+            console.log('Connecting to GATT Server...');
+            targetDevice = device;
+            return device.gatt.connect();
+      })
+      .then(server => {
+            console.log('Getting Service...');
+            return server.getPrimaryService(BLE_UART_SERVICE);
+      })
+      .then(service => {
+            console.log('Got service');
+            serviceUART = service;
+            return service.getCharacteristic(BLE_UART_RX_CHAR);
+      })
+      .then(characteristic => {
+            console.log('Got char');
+            charUARTRX = characteristic;
+            return charUARTRX.startNotifications();
+      })
+      .then(_ => {
+            console.log('Notifications started');
+            charUARTRX.addEventListener('characteristicvaluechanged',
+                                              handleBLENotifications);
+      })
+      .catch(error =>{
+           console.error(error);
+      });
+  }
+
+
+  document.getElementById('startBtn').addEventListener('click', () => {
+      startBluetooth();
+  });
+
+  document.getElementById('stopBtn').addEventListener('click', () => {
+    if (serviceUART == null) {
+      return;
+    }
+
+    charUARTRX.stopNotifications()
+    .then(_ => {
+        console.log('Notifications stopped');
+        charUARTRX.removeEventListener('characteristicvaluechanged',
+                                       handleBLENotifications);
+        serviceUART = null;
+        targetDevice.gatt.disconnect();
+    })
+    .catch(error => {
+        console.log('Argh! ' + error);
+    });
+  });
+
+</script>
+</body>
+</html>
