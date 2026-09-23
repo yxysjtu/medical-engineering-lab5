@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <title>HR WebBLE Gateway</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <script src="jqFhir.js"></script>
 </head>
 <body>
 
@@ -14,12 +16,16 @@
 <button id="sendBtn" onclick="sendHRValue()">Send HR Value</button>
 </p>
 
+<p id="status"></p>
+
 <script>
 
   const val = document.getElementById('HRValue');
+  const status = document.getElementById('status');
   let targetDevice;
   let serviceUART;
   let charUARTRX;
+  let lastHRValue = null;
 
   const BLE_UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
   const BLE_UART_RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
@@ -71,7 +77,7 @@
       const hrValue = parseInt(val.value, 10);
       if (isNaN(hrValue)) {
           console.warn("HR value is not a number, aborting send.");
-          //status.innerText = "HR value is not a valid number.";
+          status.innerText = "HR value is not a valid number.";
           return;
       }
 
