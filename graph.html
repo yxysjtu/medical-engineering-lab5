@@ -11,28 +11,153 @@
     <script src="https://cdn.plot.ly/plotly-3.1.0.min.js"></script>
     <script type="module">
 
+      // ---- Config ----
+      const BASE_URL = 'https://hapim.app.cloud.cbh.kth.se/fhir';
+      const HR_LOINC_CODE = '8867-4'; // LOINC "Heart rate"
+      const POLL_INTERVAL_MS = 10 * 1000; // live update every 10 seconds
+
+      // Human heart rate bounds used for the indicator gauge
+      // (roughly: deep bradycardia .. max exertion tachycardia)
+      const HR_MIN = 30;
+      const HR_MAX = 220;
+
+      // Patient ID comes from the URL, e.g. graph.html?id=616
+      const searchParams = new URLSearchParams(window.location.search);
+      const patientId = searchParams.get('id');
+
       // Initialize plotly
       const plotly_elem = document.getElementById('plot_area');
       const plotly_layout = {
         margin: {t: 50},
         title: 'Heart Rate',
-        grid: { rows: 1, columns: 2, pattern: "independent" }
+        grid: { rows: 1, columns: 2, pattern: "independent" },
+        xaxis: { title: 'Time (today)' },
+        yaxis: { title: 'BPM' }
       };
+
       var plotly_data = [
-        {x: [0,1,2,3,4], y: [0,1,4,9,16], type: 'scatter', name: 'heartrate'}
+        {
+          x: [],
+          y: [],
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'heartrate',
+          xaxis: 'x',
+          yaxis: 'y'
+        },
+        {
+          type: 'indicator',
+          mode: 'gauge+number+delta',
+          value: 0,
+          delta: { reference: 0 },
+          gauge: {
+            axis: { range: [HR_MIN, HR_MAX] }
+          },
+          domain: { row: 0, column: 1 }
+        }
       ];
 
       Plotly.newPlot(plotly_elem, plotly_data, plotly_layout);
 
-      /*
-      async function getMyHRData() {
-
-        // TODO: Implement!
-
+      if (!patientId) {
+        plotly_elem.innerHTML = "<p>No patient id given. Use graph.html?id=&lt;PatientID&gt;</p>";
       }
 
+      // Convert a FHIR effectiveDateTime (UTC, e.g. "2026-09-23T12:00:48.597Z")
+      // into a "local, timezone-naive" ISO-like string, so that Plotly's
+      // date axis displays it as local wall-clock time instead of UTC.
+      function toLocalNaiveISOString(dateObj) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return dateObj.getFullYear() + '-' +
+               pad(dateObj.getMonth() + 1) + '-' +
+               pad(dateObj.getDate()) + 'T' +
+               pad(dateObj.getHours()) + ':' +
+               pad(dateObj.getMinutes()) + ':' +
+               pad(dateObj.getSeconds());
+      }
+
+      // True if the given Date falls on today's date, in local time
+      // (handles time zone / daylight saving correctly, since we just
+      // compare local calendar fields).
+      function isToday(dateObj) {
+        const now = new Date();
+        return dateObj.getFullYear() === now.getFullYear() &&
+               dateObj.getMonth() === now.getMonth() &&
+               dateObj.getDate() === now.getDate();
+      }
+
+      async function fetchHRObservations() {
+        // _count is generous since we filter to "today" client-side
+        // (readings can come in as often as once a minute).
+        const url = `${BASE_URL}/Observation?patient=${encodeURIComponent(patientId)}` +
+                    `&code=${encodeURIComponent(HR_LOINC_CODE)}` +
+                    `&_sort=-date&_count=200`;
+
+        const response = await fetch(url, {
+          headers: { 'accept': 'application/fhir+json' }
+        });
+
+        if (!response.ok) {
+          throw new Error('FHIR search failed: ' + response.status);
+        }
+
+        const bundle = await response.json();
+        const entries = bundle.entry || [];
+
+        // Pull out {time: Date, value: number} for each Observation,
+        // keep only today's readings, and sort oldest -> newest for the chart.
+        const readings = entries
+          .map(e => e.resource)
+          .filter(r => r && r.effectiveDateTime && r.valueQuantity)
+          .map(r => ({
+            time: new Date(r.effectiveDateTime),
+            value: r.valueQuantity.value
+          }))
+          .filter(r => isToday(r.time))
+          .sort((a, b) => a.time - b.time);
+
+        return readings;
+      }
+
+      async function getMyHRData() {
+        if (!patientId) {
+          return;
+        }
+
+        try {
+          const readings = await fetchHRObservations();
+
+          if (readings.length === 0) {
+            console.log("No HR observations for today yet.");
+            return;
+          }
+
+          const xValues = readings.map(r => toLocalNaiveISOString(r.time));
+          const yValues = readings.map(r => r.value);
+
+          const latest = readings[readings.length - 1].value;
+          const previous = readings.length > 1
+            ? readings[readings.length - 2].value
+            : latest;
+
+          // Update trace 0 (line chart)
+          Plotly.restyle(plotly_elem, { x: [xValues], y: [yValues] }, [0]);
+
+          // Update trace 1 (indicator gauge)
+          Plotly.restyle(
+            plotly_elem,
+            { value: [latest], 'delta.reference': [previous] },
+            [1]
+          );
+
+        } catch (err) {
+          console.error("Failed to load HR data:", err);
+        }
+      }
+
+      // Initial load, then poll every 10 seconds for live updates.
       getMyHRData();
-      */
+      setInterval(getMyHRData, POLL_INTERVAL_MS);
 
     </script>
 </body>

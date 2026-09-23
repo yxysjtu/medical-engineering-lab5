@@ -30,8 +30,19 @@
   const BLE_UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
   const BLE_UART_RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
+  // Plausible human heart rate range (BPM). Values outside this range
+  // are treated as sensor noise/errors and are not sent.
+  const HR_MIN = 30;
+  const HR_MAX = 220;
+
   // FHIR client, pointing to the KTH HAPI FHIR database
   const client = jqFhir({ baseUrl: 'https://hapim.app.cloud.cbh.kth.se/fhir' });
+
+  // Send the latest HR reading automatically once every 1 minute,
+  // but only while the sensor is connected (started in startBluetooth(),
+  // cleared in the stopBtn handler).
+  const AUTO_SEND_INTERVAL_MS = 60 * 1000;
+  let autoSendTimer = null;
 
 
 
@@ -72,12 +83,24 @@
 
       const patientId = 616;
 
+      if (lastHRValue === null) {
+          console.warn("No real HR reading received yet, skipping send.");
+          status.innerText = "Waiting for a real sensor reading before sending.";
+          return;
+      }
+
       // Use whatever is currently shown in the yellow box
       // (falls back to lastHRValue if the field was edited by hand)
       const hrValue = parseInt(val.value, 10);
       if (isNaN(hrValue)) {
           console.warn("HR value is not a number, aborting send.");
           status.innerText = "HR value is not a valid number.";
+          return;
+      }
+
+      if (hrValue < HR_MIN || hrValue > HR_MAX) {
+          console.warn("HR value out of plausible range (" + HR_MIN + "-" + HR_MAX + "):", hrValue);
+          status.innerText = "HR=" + hrValue + " is outside " + HR_MIN + "-" + HR_MAX + " BPM, not sent.";
           return;
       }
 
@@ -172,6 +195,11 @@
             console.log('Notifications started');
             charUARTRX.addEventListener('characteristicvaluechanged',
                                               handleBLENotifications);
+
+            // Sensor is connected, start auto-sending every 1 minute.
+            if (autoSendTimer === null) {
+                autoSendTimer = setInterval(sendHRValue, AUTO_SEND_INTERVAL_MS);
+            }
       })
       .catch(error =>{
            console.error(error);
@@ -195,6 +223,12 @@
                                        handleBLENotifications);
         serviceUART = null;
         targetDevice.gatt.disconnect();
+
+        // Sensor is disconnected, stop auto-sending.
+        if (autoSendTimer !== null) {
+            clearInterval(autoSendTimer);
+            autoSendTimer = null;
+        }
     })
     .catch(error => {
         console.log('Argh! ' + error);
